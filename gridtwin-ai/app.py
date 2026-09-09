@@ -26,7 +26,7 @@ def predict():
     ]])
 
     raw_score = model.decision_function(features)[0]
-    is_anomaly = model.predict(features)[0] == -1
+    is_anomaly = model.predict(features)[0] == 1
 
     normalized_score = round(float(1 / (1 + np.exp(raw_score * 10))), 2)
 

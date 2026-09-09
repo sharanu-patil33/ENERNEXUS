@@ -8,6 +8,7 @@ import AnimatedBackground from './AnimatedBackground';
 import './App.css';
 
 const socket = io('http://localhost:5000');
+const BACKEND_URL = 'http://localhost:5000';
 const MAX_POINTS = 30;
 const MAX_ALERTS = 10;
 
@@ -17,6 +18,8 @@ function App() {
   const [alerts, setAlerts] = useState([]);
   const [connected, setConnected] = useState(false);
   const [relayOn, setRelayOn] = useState(true);
+  const [relayLoading, setRelayLoading] = useState(false);
+  const [relayError, setRelayError] = useState(null);
 
   useEffect(() => {
     socket.on('connect', () => setConnected(true));
@@ -62,6 +65,25 @@ function App() {
 
   const isAnomaly = data?.anomaly === true;
   const isShed = data?.relayAutoOff === true;
+
+  // ---------- Relay control: actually talks to the backend now ----------
+  const handleRelayToggle = async () => {
+    const newState = relayOn ? 'off' : 'on';
+    setRelayLoading(true);
+    setRelayError(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/relay/${newState}`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(`Backend responded ${res.status}`);
+      setRelayOn(!relayOn);
+    } catch (err) {
+      console.error('Failed to send relay command:', err);
+      setRelayError('Relay command failed — check backend connection');
+    } finally {
+      setRelayLoading(false);
+    }
+  };
 
   return (
     <div className="twin-root">
@@ -177,13 +199,15 @@ function App() {
                   <span className="relay-state">
                     Circuit Status: <b className={relayOn ? 'on' : 'off'}>{relayOn ? 'ENERGIZED' : 'DE-ENERGIZED'}</b>
                   </span>
+                  {relayError && <span className="relay-error">{relayError}</span>}
                 </div>
                 <button
                   className={`relay-btn ${relayOn ? 'cut' : 'restore'}`}
-                  onClick={() => setRelayOn(!relayOn)}
+                  onClick={handleRelayToggle}
+                  disabled={relayLoading}
                 >
                   <span className="btn-icon">{relayOn ? '⏻' : '⚡'}</span>
-                  {relayOn ? 'CUT POWER' : 'RESTORE POWER'}
+                  {relayLoading ? 'SENDING...' : relayOn ? 'CUT POWER' : 'RESTORE POWER'}
                 </button>
               </div>
             </div>
