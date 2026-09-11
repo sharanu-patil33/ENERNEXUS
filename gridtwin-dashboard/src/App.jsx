@@ -7,8 +7,8 @@ import DigitalTwin from './DigitalTwin';
 import AnimatedBackground from './AnimatedBackground';
 import './App.css';
 
-const socket = io('http://localhost:5000');
 const BACKEND_URL = 'http://localhost:5000';
+const socket = io(BACKEND_URL);
 const MAX_POINTS = 30;
 const MAX_ALERTS = 10;
 
@@ -17,9 +17,43 @@ function App() {
   const [history, setHistory] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [connected, setConnected] = useState(false);
-  const [relayOn, setRelayOn] = useState(true);
-  const [relayLoading, setRelayLoading] = useState(false);
-  const [relayError, setRelayError] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [systemMode, setSystemMode] = useState('LIVE'); // manual — you declare which mode you're running
+
+  // ---------- Demo fault-injection controls ----------
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoMode, setDemoMode] = useState('normal');
+
+  const setDemoFault = async (mode) => {
+    setDemoLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/demo/${mode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) throw new Error('Demo request failed');
+      setDemoMode(mode === 'clear' ? 'normal' : mode);
+    } catch (err) {
+      console.error('Demo fault error:', err);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
+  // ---------- Channel-specific relay control ----------
+  const toggleChannel = async (channel) => {
+    const currentState = data?.relays?.[channel] ?? 'on';
+    const newState = currentState === 'on' ? 'off' : 'on';
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/relay/${channel}/${newState}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) throw new Error('Relay request failed');
+    } catch (err) {
+      console.error('Relay toggle error:', err);
+    }
+  };
 
   useEffect(() => {
     socket.on('connect', () => setConnected(true));
@@ -63,219 +97,319 @@ function App() {
     };
   }, []);
 
-  const isAnomaly = data?.anomaly === true;
-  const isShed = data?.relayAutoOff === true;
+  // ---------- Poll event log every 4 seconds ----------
+  useEffect(() => {
+    const fetchEvents = () => {
+      fetch(`${BACKEND_URL}/api/events`)
+        .then((res) => res.json())
+        .then((list) => setEvents(list))
+        .catch(() => {});
+    };
+    fetchEvents();
+    const interval = setInterval(fetchEvents, 4000);
+    return () => clearInterval(interval);
+  }, []);
 
-  // ---------- Relay control: actually talks to the backend now ----------
-  const handleRelayToggle = async () => {
-    const newState = relayOn ? 'off' : 'on';
-    setRelayLoading(true);
-    setRelayError(null);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/relay/${newState}`, {
-        method: 'POST',
-      });
-      if (!res.ok) throw new Error(`Backend responded ${res.status}`);
-      setRelayOn(!relayOn);
-    } catch (err) {
-      console.error('Failed to send relay command:', err);
-      setRelayError('Relay command failed — check backend connection');
-    } finally {
-      setRelayLoading(false);
-    }
-  };
+  const isAnomaly = data?.anomaly === true;
+  const ch1On = data?.relays?.ch1 !== 'off';
+  const ch2On = data?.relays?.ch2 !== 'off';
 
   return (
     <div className="twin-root">
       <AnimatedBackground />
       <div className="page-content">
         {/* Status bar */}
-        <header className="status-bar">
+        <div className="status-bar">
           <div className="brand">
-            <div className="brand-logo-icon" />
-            <div>
-              <span className="brand-mark">GridTwin AI</span>
-              <span className="brand-sub">CAMPUS ENERGY · NODE 01 + 02</span>
-            </div>
+            <span className="brand-mark">GridTwin AI</span>
+            <span className="brand-sub">CAMPUS ENERGY · NODE 01 + 02</span>
           </div>
           <div className="status-right">
-            <div className={`connection-badge ${connected ? 'online' : 'offline'}`}>
-              <span className="live-dot" />
-              <span>{connected ? 'LIVE TELEMETRY' : 'DISCONNECTED'}</span>
-            </div>
-            <div className="time-badge">{new Date().toLocaleTimeString()}</div>
+            <button
+              className={`mode-toggle ${systemMode === 'LIVE' ? 'mode-live' : 'mode-sim'}`}
+              onClick={() => setSystemMode(systemMode === 'LIVE' ? 'SIMULATION' : 'LIVE')}
+              title="Click to switch — reminder only, does not stop simulator.js if it's running"
+            >
+              {systemMode === 'LIVE' ? '● REAL HARDWARE' : '◐ SIMULATION MODE'}
+            </button>
+            <span>
+              <span className={`live-dot ${connected ? 'on' : 'off'}`} />
+              {connected ? 'LIVE' : 'OFFLINE'}
+            </span>
+            <span>{new Date().toLocaleTimeString()}</span>
           </div>
-        </header>
+        </div>
 
         {!data ? (
-          <div className="waiting-container">
-            <div className="pulse-loader" />
-            <p className="waiting">Awaiting first telemetry packet...</p>
-          </div>
+          <div className="waiting">awaiting first telemetry packet...</div>
         ) : (
           <>
             {isAnomaly && (
-              <div className="anomaly-banner fault">
-                <div className="banner-left">
-                  <span className="tag">FAULT</span>
-                  <span className="msg">Anomaly detected in Load — automatic classification by onboard model</span>
-                </div>
-                <span className="score">CONFIDENCE SCORE: <strong>{data.score}</strong></span>
+              <div className="anomaly-banner">
+                <span className="tag">FAULT</span>
+                <span className="msg">Anomalous load detected — automatic classification by Isolation Forest</span>
+                <span className="score">risk {data.score}</span>
               </div>
             )}
 
-            {isShed && !isAnomaly && (
-              <div className="anomaly-banner shed">
-                <div className="banner-left">
-                  <span className="tag">SHED</span>
-                  <span className="msg">Battery critically low with no solar backup — load automatically cut to protect battery</span>
-                </div>
+            {!ch2On && !isAnomaly && (
+              <div className="anomaly-banner">
+                <span className="tag">SHED</span>
+                <span className="msg">New Load (CH2) disconnected for protection — Old Load (CH1) remains powered</span>
               </div>
             )}
 
             {/* Energy KPI strip */}
             <div className="kpi-strip">
-              <Kpi label="SOLAR GENERATION" value={(data.solarVoltage * 0.5).toFixed(1)} unit="W" type="solar" />
-              <Kpi label="BATTERY SOC" value={data.batterySOC} unit="%" type="battery" />
-              <Kpi label="GRID DRAW" value={data.decision?.grid?.toFixed(1) ?? '0.0'} unit="W" type="grid" />
-              <Kpi label="CAMPUS LOAD" value={data.power} unit="W" type="load" />
-              <div className={`kpi status-kpi ${isAnomaly ? 'status-fault' : 'status-normal'}`}>
-                <p className="kpi-label">SYSTEM HEALTH</p>
-                <div className="status-indicator">
-                  <span className="status-dot" />
-                  <p className="kpi-value">{isAnomaly ? 'FAULT' : 'OPTIMAL'}</p>
+              <Kpi label="SOLAR" value={(data.solarVoltage * 0.5).toFixed(1)} unit="W" />
+              <Kpi label="BATTERY SOC" value={data.batterySOC} unit="%" />
+              <Kpi label="GRID DRAW" value={data.decision?.grid?.toFixed(1) ?? '0.0'} unit="W" />
+              <Kpi label="CAMPUS LOAD" value={data.power} unit="W" />
+              <div className={`kpi ${isAnomaly ? 'status-fault' : 'status-normal'}`}>
+                <p className="kpi-label">STATUS</p>
+                <p className="kpi-value">{isAnomaly ? 'FAULT' : 'NORMAL'}</p>
+              </div>
+            </div>
+
+            {/* Dedicated Solar/Battery + Grid/Load detail panels */}
+            <div className="main-grid" style={{ marginBottom: '1.25rem' }}>
+              <div className="panel source-panel source-solar">
+                <p className="panel-title">
+                  <span>☀ SOLAR &amp; BATTERY</span>
+                  <span className={`source-badge ${data.isCharging ? 'charging' : ''}`}>
+                    {data.isCharging ? 'CHARGING' : 'IDLE'}
+                  </span>
+                </p>
+                <div className="source-grid">
+                  <div className="source-stat">
+                    <p className="kpi-label">SOLAR VOLTAGE</p>
+                    <p className="kpi-value">{data.solarVoltage?.toFixed(2)}<span className="unit">V</span></p>
+                  </div>
+                  <div className="source-stat">
+                    <p className="kpi-label">SOLAR SOURCE</p>
+                    <p className="kpi-value" style={{ fontSize: '1.1rem' }}>
+                      {data.solarVoltage > 2 ? 'AVAILABLE' : 'LOW'}
+                    </p>
+                  </div>
+                  <div className="source-stat">
+                    <p className="kpi-label">BATTERY VOLTAGE</p>
+                    <p className="kpi-value">{data.batteryVoltage?.toFixed(2)}<span className="unit">V</span></p>
+                  </div>
+                  <div className="source-stat">
+                    <p className="kpi-label">BATTERY SOC</p>
+                    <p className="kpi-value">{data.batterySOC}<span className="unit">%</span></p>
+                  </div>
+                </div>
+                <div className="soc-bar-track">
+                  <div className="soc-bar-fill" style={{ width: `${data.batterySOC}%` }} />
+                </div>
+              </div>
+
+              <div className="panel source-panel source-grid">
+                <p className="panel-title">
+                  <span>⚡ GRID &amp; LOAD</span>
+                  <span className={`source-badge ${(data.decision?.grid ?? 0) > 0 ? 'drawing' : ''}`}>
+                    {(data.decision?.grid ?? 0) > 0 ? 'DRAWING' : 'STANDBY'}
+                  </span>
+                </p>
+                <div className="source-grid">
+                  <div className="source-stat">
+                    <p className="kpi-label">GRID VOLTAGE</p>
+                    <p className="kpi-value">{data.voltage?.toFixed(1)}<span className="unit">V</span></p>
+                  </div>
+                  <div className="source-stat">
+                    <p className="kpi-label">GRID CURRENT</p>
+                    <p className="kpi-value">{data.current?.toFixed(2)}<span className="unit">A</span></p>
+                  </div>
+                  <div className="source-stat">
+                    <p className="kpi-label">CAMPUS LOAD</p>
+                    <p className="kpi-value">{data.power}<span className="unit">W</span></p>
+                  </div>
+                  <div className="source-stat">
+                    <p className="kpi-label">GRID DRAW</p>
+                    <p className="kpi-value">{data.decision?.grid?.toFixed(1) ?? '0.0'}<span className="unit">W</span></p>
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* AI Recommendation + Forecast */}
-            <div className="top-insights-grid">
-              <div className="panel insight-panel glow-amber">
-                <div className="panel-header">
-                  <span className="panel-title">AI RECOMMENDATION</span>
-                  <span className="panel-badge">RULE ENGINE v2.4</span>
-                </div>
-                <div className="recommendation-box">
-                  <div className="spark-icon">⚡</div>
-                  <p className="recommendation-text">
-                    {data.decision?.action ?? 'Calculating grid optimization strategy...'}
-                  </p>
-                </div>
+            <div className="main-grid" style={{ marginBottom: '1.25rem' }}>
+              <div className="panel">
+                <p className="panel-title">
+                  <span>AI RECOMMENDATION</span>
+                  <span>RULE-BASED ENGINE</span>
+                </p>
+                <p className="recommendation-text">
+                  {data.decision?.action ?? 'Calculating...'}
+                </p>
               </div>
-
-              <div className="panel insight-panel">
-                <div className="panel-header">
-                  <span className="panel-title">SOLAR FORECAST</span>
-                  <span className="panel-badge">MOVING AVG</span>
-                </div>
+              <div className="panel">
+                <p className="panel-title">
+                  <span>SOLAR TREND FORECAST</span>
+                  <span>MOVING AVG</span>
+                </p>
                 {data.forecast?.predicted_30min != null ? (
                   <div className="forecast-row">
-                    <div className="forecast-item">
+                    <div>
                       <p className="kpi-label">NEXT 30 MIN</p>
-                      <p className="forecast-value">{data.forecast.predicted_30min}<span className="unit">V</span></p>
+                      <p className="kpi-value">{data.forecast.predicted_30min}<span className="unit">V</span></p>
                     </div>
-                    <div className="forecast-divider" />
-                    <div className="forecast-item">
-                      <p className="kpi-label">NEXT 2 HOURS</p>
-                      <p className="forecast-value">{data.forecast.predicted_2hr}<span className="unit">V</span></p>
+                    <div>
+                      <p className="kpi-label">NEXT 2 HR</p>
+                      <p className="kpi-value">{data.forecast.predicted_2hr}<span className="unit">V</span></p>
                     </div>
                   </div>
                 ) : (
-                  <p className="empty-state">Gathering forecast telemetry...</p>
+                  <p className="empty-state">gathering data...</p>
                 )}
               </div>
             </div>
 
-            {/* Relay Control Panel */}
-            <div className="panel relay-panel">
-              <div className="relay-row">
-                <div className="relay-info">
-                  <div className="relay-header">
-                    <span className="panel-title">MAIN CIRCUIT RELAY</span>
-                    <span className={`relay-pill ${relayOn ? 'on' : 'off'}`}>
-                      {relayOn ? 'ACTIVE' : 'ISOLATED'}
+            {/* Load Control panel — two independent channels */}
+            <div className="panel" style={{ marginBottom: '1.25rem' }}>
+              <p className="panel-title">
+                <span>LOAD CONTROL</span>
+                <span>SELECTIVE PROTECTION</span>
+              </p>
+              <div className="load-control-grid">
+                <div className="load-channel">
+                  <div>
+                    <p className="panel-title" style={{ marginBottom: '0.2rem' }}>CH1 · OLD LOAD</p>
+                    <span className="relay-state">
+                      state: <b className={ch1On ? 'on' : 'off'}>{ch1On ? 'ENERGIZED' : 'DE-ENERGIZED'}</b>
                     </span>
                   </div>
-                  <span className="relay-state">
-                    Circuit Status: <b className={relayOn ? 'on' : 'off'}>{relayOn ? 'ENERGIZED' : 'DE-ENERGIZED'}</b>
-                  </span>
-                  {relayError && <span className="relay-error">{relayError}</span>}
+                  <button
+                    className={`relay-btn ${ch1On ? 'cut' : 'restore'}`}
+                    onClick={() => toggleChannel('ch1')}
+                  >
+                    {ch1On ? 'CUT' : 'RESTORE'}
+                  </button>
                 </div>
-                <button
-                  className={`relay-btn ${relayOn ? 'cut' : 'restore'}`}
-                  onClick={handleRelayToggle}
-                  disabled={relayLoading}
-                >
-                  <span className="btn-icon">{relayOn ? '⏻' : '⚡'}</span>
-                  {relayLoading ? 'SENDING...' : relayOn ? 'CUT POWER' : 'RESTORE POWER'}
-                </button>
+
+                <div className="load-channel">
+                  <div>
+                    <p className="panel-title" style={{ marginBottom: '0.2rem' }}>CH2 · NEW LOAD</p>
+                    <span className="relay-state">
+                      state: <b className={ch2On ? 'on' : 'off'}>{ch2On ? 'ENERGIZED' : 'DE-ENERGIZED'}</b>
+                    </span>
+                  </div>
+                  <button
+                    className={`relay-btn ${ch2On ? 'cut' : 'restore'}`}
+                    onClick={() => toggleChannel('ch2')}
+                  >
+                    {ch2On ? 'CUT' : 'RESTORE'}
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Main grid: Chart + Twin | Alerts */}
+            {/* Protection Event card */}
+            <div className="panel" style={{ marginBottom: '1.25rem' }}>
+              <p className="panel-title">
+                <span>PROTECTION EVENT</span>
+                <span>{events.length} LOGGED</span>
+              </p>
+              {data.lastAction ? (
+                <p className="recommendation-text" style={{ color: data.lastAction.reason === 'auto-protection' ? '#FF4D4F' : '#E4E9F0' }}>
+                  {data.lastAction.type} — reason: {data.lastAction.reason} · {new Date(data.lastAction.timestamp).toLocaleTimeString()}
+                </p>
+              ) : (
+                <p className="empty-state">no actions taken this session</p>
+              )}
+
+              {events.length > 0 && (
+                <div className="alerts-feed" style={{ marginTop: '0.75rem', maxHeight: '160px' }}>
+                  {events.map((ev, i) => (
+                    <div key={i} className="alert-item">
+                      <div className="alert-meta">
+                        {new Date(ev.timestamp).toLocaleTimeString()} · {ev.type} · {ev.reason}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Controlled Fault Injection Demo */}
+            <div className="panel demo-panel" style={{ marginBottom: '1.25rem' }}>
+              <p className="panel-title">
+                <span>CONTROLLED DEMO FAULT</span>
+                <span>{demoMode === 'normal' ? 'REAL TELEMETRY' : 'SIMULATION ACTIVE'}</span>
+              </p>
+
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', padding: '0.5rem 0 0.75rem' }}>
+                <button onClick={() => setDemoFault('normal')} disabled={demoLoading} className="demo-btn demo-btn-normal">
+                  🟢 NORMAL
+                </button>
+                <button onClick={() => setDemoFault('anomaly')} disabled={demoLoading} className="demo-btn demo-btn-anomaly">
+                  🟠 SIMULATE ABNORMAL LOAD
+                </button>
+                <button onClick={() => setDemoFault('overload')} disabled={demoLoading} className="demo-btn demo-btn-overload">
+                  🔴 SIMULATE OVERLOAD
+                </button>
+                <button onClick={() => setDemoFault('clear')} disabled={demoLoading} className="demo-btn demo-btn-clear">
+                  ↻ CLEAR FAULT
+                </button>
+              </div>
+
+              <div className="empty-state" style={{ fontSize: '0.72rem' }}>
+                Controlled digital fault injection for safe system validation.
+                Physical ESP32/PZEM telemetry remains unchanged in NORMAL mode.
+              </div>
+            </div>
+
+            {/* Main grid: chart + twin | alerts */}
             <div className="main-grid">
-              <div className="left-column">
-                <div className="panel chart-panel">
-                  <div className="panel-header">
-                    <span className="panel-title">REAL-TIME ENERGY FLOW</span>
-                    <span className="panel-sub-label">SOLAR/BATTERY (RIGHT) · GRID/LOAD (LEFT)</span>
-                  </div>
-                  <div className="chart-wrapper">
-                    <ResponsiveContainer width="100%" height={280}>
-                      <LineChart data={history} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <CartesianGrid stroke="#1A2332" strokeDasharray="3 3" vertical={false} />
-                        <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={{ stroke: '#1E293B' }} tickLine={false} />
-                        <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={{ stroke: '#1E293B' }} tickLine={false} />
-                        <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#64748B' }} axisLine={{ stroke: '#1E293B' }} tickLine={false} />
-                        <Tooltip
-                          contentStyle={{ background: '#0F172A', border: '1px solid #334155', borderRadius: '8px', boxShadow: '0 10px 25px -5px rgba(0,0,0,0.5)', fontFamily: 'IBM Plex Mono', fontSize: '12px' }}
-                          labelStyle={{ color: '#94A3B8', fontWeight: '600', marginBottom: '4px' }}
-                        />
-                        <Legend wrapperStyle={{ fontSize: '11px', fontFamily: 'IBM Plex Mono', paddingTop: '10px' }} />
-                        <Line yAxisId="right" type="monotone" dataKey="solar" name="Solar" stroke="#F59E0B" strokeWidth={2.5} dot={false} isAnimationActive={false} />
-                        <Line yAxisId="right" type="monotone" dataKey="battery" name="Battery" stroke="#10B981" strokeWidth={2.5} dot={false} isAnimationActive={false} />
-                        <Line yAxisId="left" type="monotone" dataKey="grid" name="Grid" stroke="#EF4444" strokeWidth={2.5} dot={false} isAnimationActive={false} />
-                        <Line yAxisId="left" type="monotone" dataKey="load" name="Load" stroke="#3B82F6" strokeWidth={2.5} dot={false} isAnimationActive={false} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+              <div>
+                <div className="panel">
+                  <p className="panel-title">
+                    <span>ENERGY FLOW</span>
+                    <span>SOLAR/BATTERY (RIGHT) · GRID/LOAD (LEFT)</span>
+                  </p>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={history}>
+                      <CartesianGrid stroke="#1B222C" strokeDasharray="3 3" />
+                      <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#6B7684' }} axisLine={{ stroke: '#232B36' }} tickLine={false} />
+                      <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#6B7684' }} axisLine={{ stroke: '#232B36' }} tickLine={false} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10, fill: '#6B7684' }} axisLine={{ stroke: '#232B36' }} tickLine={false} />
+                      <Tooltip
+                        contentStyle={{ background: '#161C26', border: '1px solid #232B36', borderRadius: 6, fontFamily: 'IBM Plex Mono', fontSize: 12 }}
+                        labelStyle={{ color: '#97A2B0' }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 11, fontFamily: 'IBM Plex Mono' }} />
+                      <Line yAxisId="right" type="monotone" dataKey="solar" name="Solar" stroke="#FFB020" strokeWidth={2} dot={false} isAnimationActive={false} />
+                      <Line yAxisId="right" type="monotone" dataKey="battery" name="Battery" stroke="#3DD68C" strokeWidth={2} dot={false} isAnimationActive={false} />
+                      <Line yAxisId="left" type="monotone" dataKey="grid" name="Grid" stroke="#FF4D4F" strokeWidth={2} dot={false} isAnimationActive={false} />
+                      <Line yAxisId="left" type="monotone" dataKey="load" name="Load" stroke="#4C9AFF" strokeWidth={2} dot={false} isAnimationActive={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
 
-                <div className="panel twin-panel">
-                  <div className="panel-header">
-                    <span className="panel-title">3D DIGITAL TWIN</span>
-                    <span className="panel-badge">LIVE SPATIAL MODEL</span>
-                  </div>
-                  <div className="digital-twin-container">
-                    <DigitalTwin data={data} />
-                  </div>
+                <div className="panel">
+                  <p className="panel-title">
+                    <span>DIGITAL TWIN</span>
+                    <span>3D · ENERGY FLOW</span>
+                  </p>
+                  <DigitalTwin data={data} />
                 </div>
               </div>
 
-              <div className="right-column">
-                <div className="panel alerts-panel">
-                  <div className="panel-header">
-                    <span className="panel-title">SYSTEM ALERTS</span>
-                    <span className="alert-count-tag">{alerts.length} LOGGED</span>
-                  </div>
+              <div>
+                <div className="panel">
+                  <p className="panel-title">
+                    <span>ALERTS</span>
+                    <span>{alerts.length} LOGGED</span>
+                  </p>
                   <div className="alerts-feed">
                     {alerts.length === 0 ? (
-                      <div className="empty-alerts">
-                        <span className="check-icon">✓</span>
-                        <p className="empty-state">No anomalies detected in current session</p>
-                      </div>
+                      <p className="empty-state">no anomalies logged this session</p>
                     ) : (
                       alerts.map((alert, i) => (
                         <div key={i} className="alert-item">
-                          <div className="alert-head">
-                            <span className="alert-badge">ANOMALY</span>
-                            <span className="alert-score">SCORE {alert.score}</span>
-                          </div>
-                          <div className="alert-metrics">
-                            <span><b>Power:</b> {alert.power}W</span>
-                            <span><b>Voltage:</b> {alert.voltage}V</span>
-                          </div>
-                          <div className="alert-time">{alert.time}</div>
+                          <div className="alert-head">⚠ anomaly · risk {alert.score}</div>
+                          <div className="alert-meta">{alert.time} · {alert.power}W · {alert.voltage}V</div>
                         </div>
                       ))
                     )}
@@ -290,14 +424,11 @@ function App() {
   );
 }
 
-function Kpi({ label, value, unit, type }) {
+function Kpi({ label, value, unit }) {
   return (
-    <div className={`kpi kpi-type-${type}`}>
+    <div className="kpi">
       <p className="kpi-label">{label}</p>
-      <p className="kpi-value">
-        {value}
-        <span className="unit">{unit}</span>
-      </p>
+      <p className="kpi-value">{value}<span className="unit">{unit}</span></p>
     </div>
   );
 }

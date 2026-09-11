@@ -20,13 +20,17 @@ def predict():
 
     features = np.array([[
         data.get('voltage', 230),
-        data.get('current', 2.2),
-        data.get('power', 500),
+        data.get('current', 0.03),
+        data.get('power', 6.5),
         data.get('temperature', 28)
     ]])
 
     raw_score = model.decision_function(features)[0]
-    is_anomaly = model.predict(features)[0] == 1
+
+    # Isolation Forest:
+    # +1 = normal
+    # -1 = anomaly
+    is_anomaly = model.predict(features)[0] == -1
 
     normalized_score = round(float(1 / (1 + np.exp(raw_score * 10))), 2)
 
@@ -50,7 +54,6 @@ def forecast_solar():
     if len(solar_history) < 3:
         return jsonify({"predicted_30min": None, "predicted_2hr": None, "note": "not enough data yet"})
 
-    # Simple moving average forecast — honest, explainable, appropriate for this data scale
     recent = list(solar_history)[-10:]
     avg = sum(recent) / len(recent)
 
@@ -67,4 +70,4 @@ def forecast_solar():
 
 
 if __name__ == '__main__':
-    app.run(port=6000, debug=True)  
+    app.run(port=6000, debug=True)
