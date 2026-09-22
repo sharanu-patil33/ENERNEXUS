@@ -735,5 +735,9 @@ Multi-Site Deployment
 ```
 
 ---
+### Dashboard View
+
+
+<img width="1840" height="891" alt="image" src="https://github.com/user-attachments/assets/a14510e3-edc3-4edb-856b-0ddd4ff94f27" />
 
 <p align="center"><b>⚡ EnerNexus — Closing the loop between sensing and action. ⚡</b></p>
