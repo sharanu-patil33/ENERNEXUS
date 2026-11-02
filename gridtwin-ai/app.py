@@ -12,6 +12,11 @@ print("✅ Real AI model loaded")
 # Keep the last 30 solar readings in memory for simple trend-based forecasting
 solar_history = deque(maxlen=30)
 
+# Anything at or below this current draw is treated as "load off / idle" —
+# never flagged as an anomaly, regardless of what Isolation Forest thinks,
+# since the model was only trained on the ~6.5W "load on" condition.
+NORMAL_MAX_CURRENT = 0.05  # amps — slightly above real bulb's ~0.03A normal draw
+
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -27,15 +32,20 @@ def predict():
 
     raw_score = model.decision_function(features)[0]
 
-    # Isolation Forest:
-    # +1 = normal
-    # -1 = anomaly
-    is_anomaly = model.predict(features)[0] == -1
+    # Isolation Forest flags anything far from "normal" in EITHER direction —
+    # including too LOW (e.g. load switched off), which isn't a real fault.
+    raw_is_anomaly = model.predict(features)[0] == -1
+
+    current_value = data.get('current', 0.03)
+
+    # Only treat it as an anomaly if it's BOTH statistically unusual AND
+    # actually elevated above the normal operating range — never for low/zero current.
+    is_anomaly = bool(raw_is_anomaly and current_value > NORMAL_MAX_CURRENT)
 
     normalized_score = round(float(1 / (1 + np.exp(raw_score * 10))), 2)
 
     result = {
-        "anomaly": bool(is_anomaly),
+        "anomaly": is_anomaly,
         "score": normalized_score
     }
     print("📤 Sending result:", result)

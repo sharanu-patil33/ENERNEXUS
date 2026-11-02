@@ -121,7 +121,7 @@ function App() {
         {/* Status bar */}
         <div className="status-bar">
           <div className="brand">
-            <span className="brand-mark">GridTwin AI</span>
+            <span className="brand-mark">ENERNEXUS</span>
             <span className="brand-sub">CAMPUS ENERGY · NODE 01 + 02</span>
           </div>
           <div className="status-right">

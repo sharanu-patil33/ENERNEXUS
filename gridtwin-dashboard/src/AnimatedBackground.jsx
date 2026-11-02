@@ -46,7 +46,11 @@ function AnimatedBackground() {
         pointerEvents: 'none',
       }}
     >
-      <Canvas camera={{ position: [0, 0, 9], fov: 55 }}>
+      <Canvas
+        camera={{ position: [0, 0, 9], fov: 55 }}
+        gl={{ alpha: true }}
+        onCreated={({ gl }) => gl.setClearColor(0x000000, 0)}
+      >
         <ParticleField count={220} color="#FFB020" radius={11} speed={0.025} size={0.045} />
         <ParticleField count={160} color="#4C9AFF" radius={14} speed={-0.015} size={0.035} />
       </Canvas>

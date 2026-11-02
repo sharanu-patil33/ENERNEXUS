@@ -30,9 +30,12 @@ body {
 .twin-root {
   position: relative;
   min-height: 100vh;
-  background:
-    radial-gradient(ellipse 900px 500px at 15% -10%, rgba(255,176,32,0.06), transparent),
-    var(--bg);
+  background-image:
+    linear-gradient(180deg, rgba(10,14,20,0.82) 0%, rgba(10,14,20,0.65) 45%, rgba(10,14,20,0.88) 100%),
+    url('/grid-background.jpg');
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
 }
 
 .page-content {
